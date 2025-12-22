@@ -1,0 +1,14 @@
+{
+  "download": false,
+  "ssrf": false,
+  "upload": false,
+  "path_traversal": false,
+  "xss": false,
+  "sqli": false,
+  "xxe": false,
+  "deserialization": false,
+  "open_redirect": false,
+  "idor": false,
+  "rce": false,
+  "system_info": false
+}

@@ -1,0 +1,13 @@
+{
+    "plan": "Enterprise",
+    "status": "active",
+    "renewal_date": "2026-12-31",
+    "licenses_used": 12,
+    "licenses_total": 50,
+    "features": [
+        "Advanced Threat Intelligence",
+        "24/7 Support",
+        "Unlimited Data Retention",
+        "Automated IR Playbooks"
+    ]
+}

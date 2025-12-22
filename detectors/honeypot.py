@@ -1,0 +1,1 @@
+# Honeypot detector placeholder
