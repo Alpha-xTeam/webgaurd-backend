@@ -115,7 +115,8 @@ def capture_stolen_data():
             'payload': data.get('payload'),
             'stolen_server_data': data.get('stolen_server_data'),
             'timestamp': datetime.datetime.now().isoformat(),
-            'victim_ip': attacker_ip
+            'victim_ip': attacker_ip,
+            'victim_email': attacker_email
         }
         
         # Store for attacker dashboard
@@ -311,10 +312,14 @@ def vulnerable_path_traversal():
                     attack_type='Path Traversal',
                     attacker_ip=attacker_ip,
                     attacker_email=attacker_email,
-                    stolen_data=json.dumps({'file': target_abs_path, 'content_preview': content[:100]}),
+                    stolen_data=json.dumps({'file': target_abs_path, 'content': content}),
                     target_url=request.url
                 )
-                safe_create_alert(message=f'Path Traversal: Real file {target_abs_path} accessed', severity='critical', source='File Monitor')
+                safe_create_alert(
+                    message=f'🔴 CRITICAL: Path Traversal! File {target_abs_path} leaked',
+                    severity='critical',
+                    source='File Monitor'
+                )
                 
                 return Response(content, mimetype='text/plain')
             else:
@@ -346,23 +351,25 @@ def vulnerable_ssrf():
         if not url:
             return jsonify({'error': 'URL required'}), 400
 
-        log_attack(
-            attack_type='SSRF',
-            attacker_ip=attacker_ip,
-            attacker_email=attacker_email,
-            stolen_data=json.dumps({'target': url}),
-            target_url=request.url
-        )
-        safe_create_alert(message=f'SSRF: Request to {url}', severity='high', source='Network Monitor')
-
         try:
             # Real request
             resp = requests.get(url, timeout=5)
-            return jsonify({
+            result_data = {
                 'status': resp.status_code,
                 'headers': dict(resp.headers),
-                'body': resp.text[:2000] # Limit response size
-            }), 200
+                'body': resp.text[:2000]
+            }
+            
+            log_attack(
+                attack_type='SSRF',
+                attacker_ip=attacker_ip,
+                attacker_email=attacker_email,
+                stolen_data=json.dumps({'target': url, 'response': result_data}),
+                target_url=request.url
+            )
+            safe_create_alert(message=f'🔴 SSRF Attack: Request to internal/external service {url} leaked data', severity='high', source='Network Monitor')
+
+            return jsonify(result_data), 200
         except Exception as fetch_err:
             return jsonify({'error': f'Fetch failed: {str(fetch_err)}'}), 502
 
@@ -385,28 +392,13 @@ def vulnerable_xxe():
         attacker_ip = get_request_ip()
         attacker_email = get_request_user_email()
         
-        log_attack(
-            attack_type='XXE',
-            attacker_ip=attacker_ip,
-            attacker_email=attacker_email,
-            stolen_data=json.dumps({'payload': xml_data[:200]}),
-            target_url=request.url
-        )
-        safe_create_alert(message=f'XXE Attack from {attacker_ip}', severity='high', source='XML Parser')
-
-        # REAL XXE: Extract file path and read it
-        
-        # Regex to capture file paths in XML entities: SYSTEM "file://..." or SYSTEM "..."
-        # We look for: SYSTEM ["'](file://)?(.*?)["']
-        match = re.search(r'SYSTEM\s+["\'](?:file:///?|)(.*?)["\']', xml_data, re.IGNORECASE)
-        
-        response_content = "XML Parsed Successfully (No external entity found)"
-        
         if match:
             extracted_path = match.group(1)
             # Fix windows mix-ups if needed (e.g. /c:/windows...)
-            if ':' in extracted_path and extracted_path.startswith('/'):
-                 extracted_path = extracted_path.lstrip('/')
+            if extracted_path.startswith('/'):
+                 # Check if it's a windows path starting with /C:/
+                 if len(extracted_path) > 3 and extracted_path[2] == ':':
+                     extracted_path = extracted_path.lstrip('/')
                  
             try:
                 if os.path.exists(extracted_path) and os.path.isfile(extracted_path):
@@ -415,10 +407,18 @@ def vulnerable_xxe():
                 else:
                     response_content = f"Error: File not found on server: {extracted_path}"
             except Exception as read_err:
-                 # Be specific about the error
-                 response_content = f"Error reading file {extracted_path}: {str(read_err)}"
+                response_content = f"Error reading file {extracted_path}: {str(read_err)}"
         elif 'test' in xml_data:
              response_content = "Test Entity Processed"
+
+        log_attack(
+            attack_type='XXE',
+            attacker_ip=attacker_ip,
+            attacker_email=attacker_email,
+            stolen_data=json.dumps({'payload': xml_data, 'result': response_content}),
+            target_url=request.url
+        )
+        safe_create_alert(message=f'🔴 XXE Attack: External entity injected, leaked content from {extracted_path if match else "XML"}', severity='high', source='XML Parser')
 
         return jsonify({
             'message': 'XML Processed',
@@ -447,19 +447,9 @@ def vulnerable_rce():
         if not command:
             return jsonify({'error': 'Command required'}), 400
 
-        log_attack(
-            attack_type='Remote Code Execution',
-            attacker_ip=attacker_ip,
-            attacker_email=get_request_user_email(),
-            stolen_data=json.dumps({'command': command}),
-            target_url=request.url
-        )
-        safe_create_alert(message=f'RCE Detected: {command}', severity='critical', source='Server OS')
-
         # DANGEROUS: EXECUTE COMMAND
         try:
             # Using subprocess to run the command and capture output
-            # capture_output=True requires Python 3.7+
             result = subprocess.run(
                 command, 
                 shell=True, 
@@ -472,6 +462,15 @@ def vulnerable_rce():
             if not output:
                 output = "Command executed successfully (No output)"
                 
+            log_attack(
+                attack_type='Remote Code Execution',
+                attacker_ip=attacker_ip,
+                attacker_email=get_request_user_email(),
+                stolen_data=json.dumps({'command': command, 'output': output}),
+                target_url=request.url
+            )
+            safe_create_alert(message=f'🔴 CRITICAL: RCE Exploited! Command "{command}" executed successfully', severity='critical', source='Server OS')
+
             return jsonify({
                 'status': 'executed',
                 'output': output
@@ -509,7 +508,7 @@ def vulnerable_deserialization():
             stolen_data=json.dumps({'payload': serialized_obj}),
             target_url=request.url
         )
-        safe_create_alert(message=f'Deserialization Attack from {attacker_ip}', severity='critical', source='App Logic')
+        safe_create_alert(message=f'🔴 CRITICAL: Insecure Deserialization Attack from {attacker_ip}', severity='critical', source='App Logic')
 
         output = "Object processed."
         
@@ -643,7 +642,82 @@ def honeypot():
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
-# API endpoints for attack management
+@api_bp.route('/sqli')
+def vulnerable_sqli():
+    """Real SQL Injection: Returns results from the database based on query input"""
+    try:
+        # Check if SQLi is patched
+        if is_patched('sqli'):
+            return jsonify({
+                'error': 'Access Denied',
+                'message': 'SQL Injection vulnerability has been patched. Database queries are safe.',
+                'patched': True
+            }), 403
+            
+        sql_query = request.args.get('query', '')
+        attacker_ip = get_request_ip()
+        attacker_email = get_request_user_email()
+        
+        if not sql_query:
+            return jsonify({'error': 'SQL Query/Pattern required'}), 400
+
+        # Create alert for SOC Tier 1
+        safe_create_alert(
+            message=f'🟠 SQL Injection Attempt Detected from {attacker_ip}',
+            severity='high',
+            source='Database Monitor'
+        )
+
+        # Log the initial attempt for the auditor
+        log_attack(
+            attack_type='SQL Injection Attempt',
+            attacker_ip=attacker_ip,
+            attacker_email=attacker_email,
+            stolen_data=json.dumps({'query': sql_query}),
+            target_url=request.url
+        )
+
+        # SIMULATE REAL SQL INJECTION RESULT
+        # In a real system, this would actually run a raw SQL query.
+        # Since we use Supabase (PostgREST), we simulate the behavior:
+        # If the user provides a 'union' or 'select', we return leaked data.
+        
+        low_query = sql_query.lower()
+        if 'select' in low_query or 'union' in low_query or '1=1' in low_query:
+            # Leak real user data to simulate a successful SQLi
+            response = supabase.table('users').select('id,email,role').execute()
+            leaked_data = response.data
+            
+            # Log the successful data theft
+            log_attack(
+                attack_type='SQL Injection (Successful)',
+                attacker_ip=attacker_ip,
+                attacker_email=attacker_email,
+                stolen_data=json.dumps({'query': sql_query, 'leaked_records_count': len(leaked_data), 'data': leaked_data}),
+                target_url=request.url
+            )
+            safe_create_alert(
+                message=f'🔴 CRITICAL: SQL Injection Successful! {len(leaked_data)} user records leaked',
+                severity='critical',
+                source='Database Monitor'
+            )
+
+            return jsonify({
+                'status': 'success',
+                'message': 'Query executed successfully',
+                'explanation': 'The application executed your malicious SQL query directly and leaked data.',
+                'results': leaked_data
+            }), 200
+        else:
+            return jsonify({
+                'status': 'error',
+                'message': f'SQL Syntax Error near "{sql_query.split()[0] if sql_query else ""}"',
+                'results': []
+            }), 400
+            
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
 @api_bp.route('/attacks', methods=['GET'])
 def get_attacks():
     """Get all attacks"""

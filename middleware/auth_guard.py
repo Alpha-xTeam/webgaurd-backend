@@ -18,6 +18,7 @@ class AuthGuardMiddleware:
             # Skip auth check for certain endpoints
             public_endpoints = [
                 '/',                 # Allow root access for SSRF demos
+                '/favicon.ico',      # Allow browser favicon
                 '/api/status',
                 '/api/register',
                 '/api/login',
@@ -34,13 +35,20 @@ class AuthGuardMiddleware:
                 '/api/attacker/fetch',
                 '/api/attacker/parse-xml',
                 '/api/attacker/redirect',
-                '/api/attacker/process'
+                '/api/attacker/process',
+                '/api/attacker/system-info',
+                '/api/attacker/rce'
             ]
 
+            # If the request is for a public endpoint or starts with a public prefix
             if request.path in public_endpoints or \
                request.path.startswith('/api/vulnerable/') or \
                request.path.startswith('/api/attacker/') or \
-               request.path == '/api/system-info':  # For SSRF demo
+               request.path == '/api/system-info':
+                return
+            
+            # Non-API routes should be allowed to fall through to 404 or other handlers
+            if not request.path.startswith('/api'):
                 return
 
             # Check for authorization header
