@@ -113,15 +113,10 @@ def capture_stolen_data():
             'session': data.get('session'),
             'url': data.get('url'),
             'payload': data.get('payload'),
-            'stolen_server_data': data.get('stolen_server_data'),
-            'timestamp': datetime.datetime.now().isoformat(),
-            'victim_ip': attacker_ip,
-            'victim_email': attacker_email
+            'stolen_server_data': data.get('stolen_server_data')
         }
         
-        # Store for attacker dashboard
-        STOLEN_DATA.append(stolen_data)
-        
+        # Log attack directly which will handle DB insertion or fallback
         log_attack(
             attack_type='XSS Data Theft',
             attacker_ip=attacker_ip,
@@ -143,8 +138,30 @@ def capture_stolen_data():
 
 @api_bp.route('/stolen-data', methods=['GET'])
 def get_stolen_data():
-    """Return all stolen data for attacker dashboard"""
-    return jsonify(STOLEN_DATA), 200
+    """Return all stolen data for attacker dashboard (Fetched from DB)"""
+    try:
+        # Fetch attacks of type 'XSS Data Theft' or 'XSS'
+        all_attacks = get_all_attacks().data
+        xss_attacks = [a for a in all_attacks if 'XSS' in a.get('attack_type', '')]
+        
+        # Transform for dashboard compatibility
+        formatted_data = []
+        for attack in xss_attacks:
+            try:
+                stolen = json.loads(attack.get('stolen_data', '{}'))
+                formatted_data.append({
+                    'timestamp': attack.get('detected_at'),
+                    'victim_ip': attack.get('attacker_ip'),
+                    'victim_email': attack.get('attacker_email'),
+                    'url': attack.get('target_url'),
+                    **stolen
+                })
+            except:
+                continue
+                
+        return jsonify(formatted_data), 200
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
 
 @api_bp.route('/clear-stolen-data', methods=['POST'])
 def clear_stolen_data():
