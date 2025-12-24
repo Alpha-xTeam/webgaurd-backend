@@ -417,8 +417,15 @@ def vulnerable_xxe():
         attacker_ip = get_request_ip()
         attacker_email = get_request_user_email()
         
-        if match:
-            extracted_path = match.group(1)
+        response_content = "XML Processed Successfully"
+        extracted_path = "Unknown"
+        
+        # Check for XXE pattern
+        # Match: <!ENTITY name SYSTEM "file:///path">
+        xxe_match = re.search(r'<!ENTITY\s+(\w+)\s+SYSTEM\s+["\']file://(.*?)["\']\s*>', xml_data)
+        
+        if xxe_match:
+            extracted_path = xxe_match.group(2)
             # Fix windows mix-ups if needed (e.g. /c:/windows...)
             if extracted_path.startswith('/'):
                  # Check if it's a windows path starting with /C:/
@@ -433,6 +440,7 @@ def vulnerable_xxe():
                     response_content = f"Error: File not found on server: {extracted_path}"
             except Exception as read_err:
                 response_content = f"Error reading file {extracted_path}: {str(read_err)}"
+        
         elif 'test' in xml_data:
              response_content = "Test Entity Processed"
 
@@ -443,7 +451,12 @@ def vulnerable_xxe():
             stolen_data=json.dumps({'payload': xml_data, 'result': response_content}),
             target_url=request.url
         )
-        safe_create_alert(message=f'🔴 XXE Attack: External entity injected, leaked content from {extracted_path if match else "XML"}', severity='high', source='XML Parser')
+        
+        safe_create_alert(
+            message=f'🔴 XXE Attack: External entity injected, leaked content from {extracted_path}', 
+            severity='high', 
+            source='XML Parser'
+        )
 
         return jsonify({
             'message': 'XML Processed',
