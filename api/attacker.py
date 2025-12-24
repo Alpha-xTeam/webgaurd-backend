@@ -141,8 +141,15 @@ def get_stolen_data():
     """Return all stolen data for attacker dashboard (Fetched from DB)"""
     try:
         # Fetch attacks of type 'XSS Data Theft' or 'XSS'
-        all_attacks = get_all_attacks().data
-        xss_attacks = [a for a in all_attacks if 'XSS' in a.get('attack_type', '')]
+        attacks_response = get_all_attacks()
+        
+        # Handle case where get_all_attacks might return list or response object
+        all_attacks = attacks_response.data if hasattr(attacks_response, 'data') else attacks_response
+        
+        if not isinstance(all_attacks, list):
+            return jsonify([]), 200
+            
+        xss_attacks = [a for a in all_attacks if 'XSS' in str(a.get('attack_type', ''))]
         
         # Transform for dashboard compatibility
         formatted_data = []
@@ -165,10 +172,11 @@ def get_stolen_data():
 
 @api_bp.route('/clear-stolen-data', methods=['POST'])
 def clear_stolen_data():
-    """Clear all stolen data"""
+    """Clear all stolen data (Local & attempt global)"""
     global STOLEN_DATA
     STOLEN_DATA = []
-    return jsonify({'message': 'Stolen data cleared', 'success': True}), 200
+    # Actually most data is in DB now, so this mostly clears local session cache
+    return jsonify({'message': 'Stolen data cache cleared', 'success': True}), 200
 
 # -------------------------------------------------------------------------
 # REAL VULNERABILITIES (ACTUAL EXECUTION)

@@ -237,6 +237,40 @@ def vulnerable_xxe():
     xml_data = request.data.decode('utf-8')
     log_vulnerable_request('xxe', {'xml_length': len(xml_data)})
 
+    # ========================================================
+    # SIMULATION: Manually handle XXE for training purposes 🎓
+    # Standard Python ElementTree is safe by default.
+    # ========================================================
+    import re
+    # Match: <!ENTITY name SYSTEM "file:///path">
+    # We use a unique variable name to avoid any conflicts
+    xxe_pattern = re.search(r'<!ENTITY\s+(\w+)\s+SYSTEM\s+["\']file://(.*?)["\']\s*>', xml_data)
+    
+    if xxe_pattern:
+        entity_name = xxe_pattern.group(1)
+        file_path = xxe_pattern.group(2)
+        
+        # Windows path fix: remove leading slash if it looks like /C:/
+        if os.name == 'nt' and file_path.startswith('/') and ':' in file_path:
+            file_path = file_path.lstrip('/')
+            
+        try:
+            if os.path.exists(file_path):
+                with open(file_path, 'r', errors='ignore') as f:
+                    content = f.read()
+                
+                # Check if the entity is actually used in the body
+                if f'&{entity_name};' in xml_data:
+                    return jsonify({
+                        'content': content,
+                        'message': 'XXE Vulnerability Exploited Successfully! 🔓',
+                        'file_read': file_path
+                    }), 200
+            else:
+                return jsonify({'error': f'File not found: {file_path}'}), 404
+        except Exception as e:
+            return jsonify({'error': f'Access denied to file: {str(e)}'}), 500
+
     try:
         root = ET.fromstring(xml_data)
         result = {}
@@ -244,6 +278,8 @@ def vulnerable_xxe():
             result[child.tag] = child.text
         return jsonify(result), 200
     except Exception as e:
+        # If any other error occurs (like NameError 'match'), it will surface here.
+        # Ensure we don't use undefined variables in this block.
         return jsonify({'error': str(e)}), 400
 
 @api_bp.route('/vulnerable/deserialize', methods=['POST'])
