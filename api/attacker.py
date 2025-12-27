@@ -257,10 +257,12 @@ def vulnerable_404():
                 created_at=get_baghdad_time()
             )
 
+            # Create incident in the EXACT format Tier 1 expects
             safe_create_incident(
-                title=f'XSS Attack Detected',
-                description=f'Cross-Site Scripting attempt from IP {attacker_ip}. Payload: {user_input}',
-                severity='high'
+                title=f'XSS: Cross-Site Scripting Attempt',
+                description=f"Source IP: {attacker_ip}\nTarget URL: {request.url}\nPayload: {user_input}\nAction: Malicious script injection blocked by WAF simulation.",
+                severity='high',
+                created_at=get_baghdad_time()
             )
         
         return jsonify({

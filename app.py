@@ -1,4 +1,4 @@
-from flask import Flask, request
+from flask import Flask, request, make_response
 from flask_cors import CORS
 from config import Config
 from api.auth import api_bp as auth_bp
@@ -25,22 +25,23 @@ def create_app(config_class=Config):
     app = Flask(__name__)
     app.config.from_object(config_class)
 
-    # Even more permissive CORS for debugging production issues
+    # Permissive CORS for production
     CORS(app, resources={r"/api/*": {
-        "origins": "*",
+        "origins": ["https://www.webguard.zone.id", "http://localhost:3000"],
         "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"],
         "allow_headers": ["Content-Type", "Authorization", "X-User-Email"],
-        "supports_credentials": True
+        "supports_credentials": True,
+        "expose_headers": ["Content-Type", "Authorization"]
     }})
 
     # *** CRITICAL: Handle OPTIONS FIRST before any middleware ***
     @app.before_request
     def handle_options():
         if request.method == 'OPTIONS':
-            from flask import make_response
             response = make_response('', 200)
-            origin = request.headers.get('Origin', '*')
-            response.headers['Access-Control-Allow-Origin'] = origin
+            origin = request.headers.get('Origin')
+            if origin:
+                response.headers['Access-Control-Allow-Origin'] = origin
             response.headers['Access-Control-Allow-Methods'] = 'GET, POST, PUT, DELETE, OPTIONS, PATCH'
             response.headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization, X-User-Email'
             response.headers['Access-Control-Allow-Credentials'] = 'true'
@@ -69,50 +70,20 @@ def create_app(config_class=Config):
     ThreatDetectorMiddleware(app)
     SuspiciousActivityDetectorMiddleware(app)
 
-    # Create upload directory if it doesn't exist
-    upload_folder = app.config.get('UPLOAD_FOLDER')
-    if not upload_folder:
-        upload_folder = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'uploads')
-        app.config['UPLOAD_FOLDER'] = upload_folder
-    
+    # Create upload directory
+    upload_folder = app.config.get('UPLOAD_FOLDER', os.path.join(os.getcwd(), 'uploads'))
     os.makedirs(upload_folder, exist_ok=True)
 
     @app.route('/')
     def index():
-        return {"message": "Welcome to WebGuard-IR Internal API", "status": "active", "access": "granted"}
+        return {"message": "Welcome to WebGuard-IR Internal API (Live on PythonAnywhere)", "status": "active"}
 
     @app.route('/favicon.ico')
     def favicon():
-        from flask import send_from_directory
-        import os
-        # Return a simple 204 No Content for favicon to avoid errors
         return '', 204
 
     return app
 
 if __name__ == '__main__':
-    # Suppress Flask/Werkzeug logging
-    import logging
-    log = logging.getLogger('werkzeug')
-    log.setLevel(logging.ERROR)
-    
-    # Suppress other loggers
-    logging.getLogger('urllib3').setLevel(logging.ERROR)
-    logging.getLogger('requests').setLevel(logging.ERROR)
-
     app = create_app()
-    
-    # Custom startup message - only print in the reloader process or if debug is off
-    if os.environ.get('WERKZEUG_RUN_MAIN') == 'true' or not app.config['DEBUG']:
-        print("\n" + "="*50)
-        print("  WebGuard-IR Backend Server")
-        print("  Status: Running")
-        print("  URL: http://127.0.0.1:5000")
-        print("="*50 + "\n")
-
-    app.run(
-        debug=app.config['DEBUG'],
-        host='0.0.0.0',
-        port=5000,
-        threaded=True
-    )
+    app.run(debug=True, host='0.0.0.0', port=5000)

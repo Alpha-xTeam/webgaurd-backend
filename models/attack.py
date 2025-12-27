@@ -215,21 +215,22 @@ def delete_attack(attack_id):
     return True
 
 def clear_all_attacker_data():
-    """Delete ALL attacks/sessions from DB and Fallback (Persistent Clear)"""
+    """Delete ALL attacks, alerts, and incidents from DB and Fallback (Persistent Clear)"""
     print("🧹 Starting full purge of attacker data...")
     
-    # 1. Try DB - Delete everything from 'attacks' table
-    try:
-        # Use multiple strategies to bypass RLS or ID format issues
-        supabase.table('attacks').delete().neq('status', 'nonexistent_status_placeholder').execute()
-        print("✅ Supabase 'attacks' table purged.")
-    except Exception as e:
-        print(f"❌ DB full clear failed: {e}")
+    # 1. Purge from DB
+    tables_to_clear = ['attacks', 'alerts', 'incidents', 'incident_responses', 'blocked_ips']
+    for table in tables_to_clear:
+        try:
+            # Delete everything where ID is not null (guaranteed to catch everything)
+            supabase.table(table).delete().neq('id', '00000000-0000-0000-0000-000000000000').execute()
+            print(f"✅ Supabase '{table}' table purged.")
+        except Exception as e:
+            print(f"❌ DB clear failed for {table}: {e}")
 
     # 2. Clear from Fallback
     try:
         if os.path.exists(FALLBACK_FILE):
-            # Overwrite with empty list
             with open(FALLBACK_FILE, 'w') as f:
                 json.dump([], f, indent=2)
             print(f"✅ Fallback file {FALLBACK_FILE} cleared.")
