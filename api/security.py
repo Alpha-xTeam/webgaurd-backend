@@ -457,6 +457,29 @@ def get_soc_blocklist():
         "hosts": BLOCKED_HOSTS
     })
 
+@api_bp.route('/blocklist/add', methods=['POST'])
+@require_auth
+def add_to_blocklist():
+    """Add an IP or Host to the blocklist"""
+    try:
+        data = request.get_json()
+        ip = data.get('ip')
+        host = data.get('host')
+        
+        if ip and ip not in BLOCKED_IPS:
+            BLOCKED_IPS.append(ip)
+        if host and host not in BLOCKED_HOSTS:
+            BLOCKED_HOSTS.append(host)
+            
+        return jsonify({
+            "success": True, 
+            "message": "Successfully added to blocklist",
+            "ips": BLOCKED_IPS,
+            "hosts": BLOCKED_HOSTS
+        })
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
 @api_bp.route('/blocklist/remove', methods=['POST'])
 @require_auth
 def remove_from_blocklist():
