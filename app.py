@@ -25,11 +25,13 @@ def create_app(config_class=Config):
     app = Flask(__name__)
     app.config.from_object(config_class)
 
-    # Enable CORS with full support for all HTTP methods
-    CORS(app, 
-         resources={r"/api/*": {"origins": "*"}},
-         allow_headers=['Content-Type', 'Authorization', 'X-User-Email'],
-         methods=['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'PATCH'])
+    # Even more permissive CORS for debugging production issues
+    CORS(app, resources={r"/api/*": {
+        "origins": "*",
+        "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"],
+        "allow_headers": ["Content-Type", "Authorization", "X-User-Email"],
+        "supports_credentials": True
+    }})
 
     # Register blueprints
     app.register_blueprint(auth_bp, url_prefix='/api')
@@ -60,6 +62,19 @@ def create_app(config_class=Config):
         app.config['UPLOAD_FOLDER'] = upload_folder
     
     os.makedirs(upload_folder, exist_ok=True)
+    
+    @app.before_request
+    def handle_options():
+        if request.method == 'OPTIONS':
+            from flask import make_response
+            response = make_response('', 200)
+            origin = request.headers.get('Origin', '*')
+            response.headers['Access-Control-Allow-Origin'] = origin
+            response.headers['Access-Control-Allow-Methods'] = 'GET, POST, PUT, DELETE, OPTIONS, PATCH'
+            response.headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization, X-User-Email'
+            response.headers['Access-Control-Allow-Credentials'] = 'true'
+            response.headers['Access-Control-Max-Age'] = '86400'
+            return response
 
     @app.route('/')
     def index():
