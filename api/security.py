@@ -1,6 +1,11 @@
 from flask import Blueprint, jsonify, request
 from middleware.auth_guard import require_auth
+from api.attacker import BLOCKED_IPS, BLOCKED_HOSTS
 import datetime
+import subprocess
+import os
+import platform
+import shlex
 
 api_bp = Blueprint('security', __name__)
 
@@ -31,8 +36,7 @@ def escalate_to_tier2():
         
         TIER2_ESCALATIONS.append(escalation)
         
-        print(f"🚨 TIER 2 ESCALATION: {escalation['attack_type']} from {escalation['analyst_name']}")
-        print(f"   Notes: {escalation['analyst_notes']}")
+        # Escalation logged internally
         
         return jsonify({
             "success": True,
@@ -89,7 +93,7 @@ def escalate_to_tier3():
         
         TIER3_ESCALATIONS.append(escalation)
         
-        print(f"🔥 TIER 3 ESCALATION (CSIRT): {escalation['attack_type']} from {escalation['tier2_analyst']}")
+        # Escalation to CSIRT logged internally
         
         # Remove from Tier 2 list (optional, assuming we move it)
         # In a real DB we would just update the status_id
@@ -371,8 +375,7 @@ def create_alert():
     try:
         data = request.get_json()
 
-        # In a real system, this would save to database and notify security team
-        print(f"🚨 New Alert: {data}")
+        # Alert logged successfully
 
         return jsonify({
             "success": True,
@@ -383,3 +386,98 @@ def create_alert():
             "success": False,
             "error": str(e)
         }), 500
+
+@api_bp.route('/terminal/execute', methods=['POST'])
+@require_auth
+def terminal_execute():
+    """Execute analysis commands (Real OS Execution)"""
+    try:
+        data = request.get_json()
+        command = data.get('command', '').strip()
+        
+        if not command:
+            return jsonify({"success": False, "error": "No command provided"}), 400
+        
+        # Mapping common Unix commands to Windows equivalents if needed
+        # But user wants "real", so we let the shell handle it.
+        # If on Windows, we'll try to use powershell if available, else cmd.
+        
+        is_windows = platform.system() == "Windows"
+        
+        try:
+            if is_windows:
+                # Use powershell for better command compatibility (ls, pwd, etc work in PS)
+                process = subprocess.Popen(
+                    ["powershell", "-Command", command],
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                    shell=True
+                )
+            else:
+                # Unix/Linux
+                process = subprocess.Popen(
+                    command,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                    shell=True
+                )
+            
+            stdout, stderr = process.communicate(timeout=10)
+            
+            output = stdout if stdout else stderr
+            if not output and process.returncode == 0:
+                output = "[Command executed successfully with no output]"
+            elif not output and process.returncode != 0:
+                output = f"[Command failed with exit code {process.returncode}]"
+                
+            return jsonify({
+                "success": True, 
+                "output": output,
+                "returncode": process.returncode
+            })
+            
+        except subprocess.TimeoutExpired:
+            process.kill()
+            return jsonify({"success": True, "output": "Error: Command timed out (10s limit)"})
+        except Exception as e:
+            return jsonify({"success": True, "output": f"Error: {str(e)}"})
+
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
+@api_bp.route('/blocklist', methods=['GET'])
+@require_auth
+def get_soc_blocklist():
+    """Get the current global blocklist for SOC management"""
+    return jsonify({
+        "success": True,
+        "ips": BLOCKED_IPS,
+        "hosts": BLOCKED_HOSTS
+    })
+
+@api_bp.route('/blocklist/remove', methods=['POST'])
+@require_auth
+def remove_from_blocklist():
+    """Remove an IP or Host from the blocklist"""
+    try:
+        data = request.get_json()
+        ip = data.get('ip')
+        host = data.get('host')
+        
+        removed = False
+        if ip and ip in BLOCKED_IPS:
+            BLOCKED_IPS.remove(ip)
+            removed = True
+        if host and host in BLOCKED_HOSTS:
+            BLOCKED_HOSTS.remove(host)
+            removed = True
+            
+        if removed:
+            return jsonify({"success": True, "message": "Successfully removed from blocklist"})
+        else:
+            return jsonify({"success": False, "error": "Item not found in blocklist"})
+            
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500

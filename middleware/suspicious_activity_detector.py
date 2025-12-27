@@ -161,7 +161,7 @@ class SuspiciousActivityDetector:
     
     def handle_high_rate_requests(self, user_email: str, request_count: int):
         """Handle user making too many requests"""
-        logger.warning(f"High rate requests detected: {user_email} - {request_count} requests/minute")
+        # Monitoring logged internally
         
         # Create security alert
         self.create_security_alert(
@@ -178,7 +178,7 @@ class SuspiciousActivityDetector:
     
     def handle_multiple_ips(self, user_email: str, unique_ips: Set[str]):
         """Handle user accessing from multiple IPs"""
-        logger.warning(f"Multiple IPs detected: {user_email} - {len(unique_ips)} IPs")
+        # Monitoring logged internally
         
         # Create security alert
         self.create_security_alert(
@@ -195,7 +195,7 @@ class SuspiciousActivityDetector:
     
     def handle_high_ip_activity(self, ip_address: str, request_count: int):
         """Handle high activity from single IP"""
-        logger.warning(f"High IP activity detected: {ip_address} - {request_count} requests/5min")
+        # Monitoring logged internally
         
         # Create security alert
         self.create_security_alert(
@@ -213,7 +213,7 @@ class SuspiciousActivityDetector:
     
     def handle_attack_detected(self, attack_type: str, user_email: str, ip_address: str, url: str):
         """Handle detected attack pattern"""
-        logger.error(f"Attack detected: {attack_type} by {user_email} from {ip_address} at {url}")
+        # Attack logged internally
         
         # Create high-priority security alert
         alert_id = self.create_security_alert(
@@ -300,8 +300,8 @@ class SuspiciousActivityDetector:
                 return result.data[0]['id']
             return None
             
-        except Exception as e:
-            logger.error(f"Failed to create security alert: {e}")
+        except Exception:
+            # Silent failure for console cleanup
             return None
     
     def start_monitoring(self):

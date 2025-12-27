@@ -1,10 +1,15 @@
 from integrations.supabase import supabase
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 import json
 import os
 import uuid
 
 FALLBACK_FILE = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'data', 'attacks_fallback.json')
+
+def get_baghdad_time():
+    """Returns current time in Baghdad (UTC+3) with proper offset"""
+    tz = timezone(timedelta(hours=3))
+    return datetime.now(tz).isoformat()
 
 def _save_fallback(attack_data):
     try:
@@ -47,11 +52,11 @@ def log_attack(attack_type, attacker_ip, attacker_email, stolen_data, target_url
         'target_url': target_url,
         'user_agent': user_agent,
         'status': 'active',
-        'detected_at': datetime.utcnow().isoformat()
+        'detected_at': get_baghdad_time()
     }
     
     try:
-        return supabase.table('attacks').insert(attack_data).execute()
+        return supabase.table('attacker').insert(attack_data).execute()
     except Exception as e:
         # Silently use fallback (RLS errors are expected in dev)
         _save_fallback(attack_data)
@@ -63,7 +68,7 @@ def log_attack(attack_type, attacker_ip, attacker_email, stolen_data, target_url
 def get_all_attacks():
     """Get all attack logs (merged DB + Fallback)"""
     try:
-        db_attacks = supabase.table('attacks').select('*').order('detected_at', desc=True).execute().data
+        db_attacks = supabase.table('attacker').select('*').order('detected_at', desc=True).execute().data
     except:
         db_attacks = []
         
@@ -81,7 +86,7 @@ def get_all_attacks():
 def get_active_attacks():
     """Get only active (unmitigated) attacks"""
     try:
-        db_attacks = supabase.table('attacks').select('*').eq('status', 'active').order('detected_at', desc=True).execute().data
+        db_attacks = supabase.table('attacker').select('*').eq('status', 'active').order('detected_at', desc=True).execute().data
     except:
         db_attacks = []
         
@@ -101,7 +106,7 @@ def block_attacker(attacker_email):
         supabase.table('users').update({'status': 'blocked', 'blocked_at': datetime.utcnow().isoformat()}).eq('email', attacker_email).execute()
         
         # Mark all their attacks as mitigated
-        supabase.table('attacks').update({'status': 'mitigated', 'mitigated_at': datetime.utcnow().isoformat()}).eq('attacker_email', attacker_email).execute()
+        supabase.table('attacker').update({'status': 'mitigated', 'mitigated_at': datetime.utcnow().isoformat()}).eq('attacker_email', attacker_email).execute()
     except Exception as e:
         print(f"Block attacker DB failed: {e}")
         
@@ -120,7 +125,7 @@ def mitigate_all_attacks():
     
     # Mark all attacks as mitigated in DB
     try:
-        supabase.table('attacks').update({
+        supabase.table('attacker').update({
             'status': 'mitigated',
             'mitigated_at': datetime.utcnow().isoformat()
         }).eq('status', 'active').execute()
@@ -147,3 +152,71 @@ def mitigate_all_attacks():
         'mitigated_attacks': len(attacks),
         'blocked_users': len(blocked_users)
     }
+
+def update_attack_status(attack_id, status, notes=None, mitigated_at=None):
+    """Update status of a specific attack in DB and Fallback"""
+    update_data = {
+        'status': status,
+        'mitigated_at': mitigated_at or get_baghdad_time()
+    }
+    if notes:
+        update_data['analyst_notes'] = notes
+
+    # 1. Try DB
+    db_success = False
+    try:
+        supabase.table('attacker').update(update_data).eq('id', attack_id).execute()
+        db_success = True
+    except Exception as e:
+        print(f"DB update failed for attack {attack_id}: {e}")
+
+    # 2. Update Fallback anyway to stay in sync
+    try:
+        if os.path.exists(FALLBACK_FILE):
+            with open(FALLBACK_FILE, 'r') as f:
+                attacks = json.load(f)
+            
+            updated = False
+            for attack in attacks:
+                if attack.get('id') == attack_id:
+                    attack.update(update_data)
+                    updated = True
+                    break
+            
+            if updated:
+                with open(FALLBACK_FILE, 'w') as f:
+                    json.dump(attacks, f, indent=2)
+                return True
+    except Exception as e:
+        print(f"Fallback update failed for attack {attack_id}: {e}")
+
+    return db_success
+
+def clear_all_attacker_data():
+    """Delete ALL attacks/sessions from DB and Fallback (Persistent Clear)"""
+    print("🧹 Starting full purge of attacker data...")
+    
+    # 1. Try DB - Delete everything from 'attacker' table
+    try:
+        # Strategy A: Use a broad range for integer IDs
+        supabase.table('attacker').delete().gt('id', -1).execute()
+        # Strategy B: Use a wildcard mismatch for UUIDs/Strings
+        supabase.table('attacker').delete().neq('id', '00000000-0000-0000-0000-000000000000').execute()
+        # Strategy C: Filter for any detected_at value (usually exists)
+        supabase.table('attacker').delete().neq('detected_at', '1970-01-01').execute()
+        
+        print("✅ Supabase 'attacker' table cleared.")
+    except Exception as e:
+        print(f"❌ DB full clear failed: {e}")
+
+    # 2. Clear from Fallback
+    try:
+        if os.path.exists(FALLBACK_FILE):
+            # Overwrite with empty list
+            with open(FALLBACK_FILE, 'w') as f:
+                json.dump([], f, indent=2)
+            print(f"✅ Fallback file {FALLBACK_FILE} cleared.")
+    except Exception as e:
+        print(f"❌ Fallback full clear failed: {e}")
+    
+    return True

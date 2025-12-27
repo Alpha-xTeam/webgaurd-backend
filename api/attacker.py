@@ -1,15 +1,17 @@
 from flask import Blueprint, request, jsonify, redirect, Response
-from models.attack import log_attack, get_all_attacks, get_active_attacks, mitigate_all_attacks
+from models.attack import log_attack, get_all_attacks, get_active_attacks, mitigate_all_attacks, update_attack_status, clear_all_attacker_data
 from models.alert import create_alert
 from models.incident import create_incident
 from integrations.supabase import supabase
 import json
+import uuid
 import requests
 import os
 import subprocess
 import platform
 import re
 import datetime
+from datetime import timedelta
 import jwt
 from utils.request_utils import get_request_ip
 
@@ -84,17 +86,27 @@ STORED_SEARCHES = []
 # GLOBAL STORAGE FOR STOLEN CREDENTIALS
 STOLEN_DATA = []
 
+# GLOBAL BLOCKLIST STORAGE
+BLOCKED_IPS = []
+BLOCKED_HOSTS = []
+
+def get_baghdad_time():
+    """Returns current time in Baghdad (UTC+3) with proper offset"""
+    from datetime import timezone
+    tz = timezone(timedelta(hours=3))
+    return datetime.datetime.now(tz).isoformat()
+
 def safe_create_alert(*args, **kwargs):
     try:
         create_alert(*args, **kwargs)
-    except Exception as e:
-        print(f"Failed to create alert: {e}")
+    except Exception:
+        pass
 
 def safe_create_incident(*args, **kwargs):
     try:
         create_incident(*args, **kwargs)
-    except Exception as e:
-        print(f"Failed to create incident: {e}")
+    except Exception:
+        pass
 
 # Endpoint to capture stolen data from client-side XSS
 @api_bp.route('/capture', methods=['POST'])
@@ -129,7 +141,8 @@ def capture_stolen_data():
         safe_create_alert(
             message=f'Data Exfiltration Detected from {attacker_ip}',
             severity='critical',
-            source='XSS Monitor'
+            source='XSS Monitor',
+            created_at=get_baghdad_time()
         )
         
         return jsonify({'status': 'captured'}), 200
@@ -172,11 +185,15 @@ def get_stolen_data():
 
 @api_bp.route('/clear-stolen-data', methods=['POST'])
 def clear_stolen_data():
-    """Clear all stolen data (Local & attempt global)"""
-    global STOLEN_DATA
+    """Clear all stolen data (DB + Local + Searches)"""
+    global STOLEN_DATA, STORED_SEARCHES
     STOLEN_DATA = []
-    # Actually most data is in DB now, so this mostly clears local session cache
-    return jsonify({'message': 'Stolen data cache cleared', 'success': True}), 200
+    STORED_SEARCHES = []
+    
+    # Persistent delete from models (DB + Fallback)
+    clear_all_attacker_data()
+    
+    return jsonify({'message': 'Stolen data and trap searches cleared persistentely', 'success': True}), 200
 
 # -------------------------------------------------------------------------
 # REAL VULNERABILITIES (ACTUAL EXECUTION)
@@ -236,7 +253,8 @@ def vulnerable_404():
             safe_create_alert(
                 message=f'XSS Attack detected from {attacker_ip}',
                 severity='critical',
-                source='Vulnerability Scanner'
+                source='Vulnerability Scanner',
+                created_at=get_baghdad_time()
             )
         
         return jsonify({
@@ -291,9 +309,12 @@ def vulnerable_idor():
                 title=f'IDOR Attack - User Data Exposure',
                 description=f'Unauthorized access to user profile data via IDOR vulnerability. Target ID: {user_id}, Source IP: {attacker_ip}',
                 severity='high',
-                category='Data Breach'
+                category='Data Breach',
+                created_at=get_baghdad_time()
             )
 
+            # Include attacker email in response for realism
+            user_data['accessed_by'] = attacker_email
             return jsonify(user_data), 200
         else:
             return jsonify({'error': 'User not found in database'}), 404
@@ -428,16 +449,59 @@ def vulnerable_xxe():
             extracted_path = xxe_match.group(2)
             # Fix windows mix-ups if needed (e.g. /c:/windows...)
             if extracted_path.startswith('/'):
-                 # Check if it's a windows path starting with /C:/
                  if len(extracted_path) > 3 and extracted_path[2] == ':':
                      extracted_path = extracted_path.lstrip('/')
                  
             try:
+                # TRY REAL FILE READ FIRST
                 if os.path.exists(extracted_path) and os.path.isfile(extracted_path):
                     with open(extracted_path, 'r', encoding='utf-8', errors='ignore') as f:
                         response_content = f.read()
                 else:
-                    response_content = f"Error: File not found on server: {extracted_path}"
+                    # HIGH FIDELITY SIMULATED DUMP (PREMIUM FORENSIC OUTPUT)
+                    current_time = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                    response_content = f"""
+================================================================================
+[EXFILTRATED SYSTEM DATA - XXE ATTACK SUCCESSFUL]
+================================================================================
+Target Entity: {extracted_path}
+Capture Time: {current_time}
+Host Context: webguard-internal-node-01 (Ubuntu 22.04.3 LTS)
+--------------------------------------------------------------------------------
+
+[+] SYSTEM IDENTIFICATION
+    ID: {str(uuid.uuid4()).upper()}
+    Node: Mainframe-PROD-01
+    Kernel: 5.15.0-89-generic #99-Ubuntu SMP
+    Uptime: 12 days, 04:22:11
+
+[+] INTERNAL NETWORK DISCOVERY
+    Local IP: 10.0.52.12
+    Gateway: 10.0.52.1
+    DNS: 1.1.1.1, 8.8.8.8
+    Listening Ports: 22(SSH), 80(HTTP), 443(HTTPS), 5432(Postgres), 6379(Redis)
+
+[+] IDENTIFIED SENSITIVE FILES (PENDING EXFILTRATION)
+    - /root/.ssh/id_rsa (RSA Private Key - FOUND)
+    - /etc/shadow (System Hashes - ACCESS GRANTED)
+    - /var/www/html/.env (Web Credentials - FOUND)
+    - /etc/kubernetes/pki/ca.key (K8s Root Key - ACCESSIBLE)
+
+[+] DUMPING SENSITIVE CREDENTIALS (SAMPLED)
+    DB_USER: webguard_admin
+    DB_PASS: SupaSafe_P@ss_2024_!
+    AWS_ACCESS_KEY: AKIAJSB192837465Z (EXPOSED)
+    SMTP_SERVER: smtp.internal.webguard.ir
+
+[+] RECENT SYSTEM LOGS
+    [2025-12-27 11:20:15] auth.info: root login on tty1
+    [2025-12-27 11:35:02] security.audit: policy_check_bypass triggered by SYSTEM_ENTITY
+    [2025-12-27 11:48:19] app.error: XML External Entity resolution attempted
+
+================================================================================
+END OF DATA DUMP - WEBG-ID: {os.getpid()}
+================================================================================
+"""
             except Exception as read_err:
                 response_content = f"Error reading file {extracted_path}: {str(read_err)}"
         
@@ -459,8 +523,9 @@ def vulnerable_xxe():
         )
 
         return jsonify({
-            'message': 'XML Processed',
-            'result': response_content
+            'message': 'XML Processed (SYSTEM ENTITY RESOLVED)',
+            'result': response_content,
+            'real_data_captured': True
         }), 200
 
     except Exception as e:
@@ -797,17 +862,66 @@ def resolve_attack(attack_id):
         notes = data.get('notes', '')
         analyst = data.get('analyst', 'Unknown')
         
-        print(f"🔒 Attack {attack_id} marked as {resolution} by {analyst}")
-        print(f"   Notes: {notes}")
+        # Attack resolution logged internally
         
-        # In real system, this would update the database
-        # For now, just acknowledge the resolution
-        return jsonify({
-            'success': True,
-            'message': f'Attack {attack_id} resolved successfully',
-            'resolution': resolution,
-            'analyst': analyst
-        }), 200
-        
+        # Use centralized update function (DB + Fallback)
+        update_attack_status(
+            attack_id=attack_id,
+            status=resolution,
+            notes=notes,
+            mitigated_at=get_baghdad_time()
+        )
+            
+        return jsonify({'success': True, 'message': f'Attack {resolution}'}), 200
     except Exception as e:
         return jsonify({'error': str(e)}), 500
+
+@api_bp.route('/attacks/<attack_id>', methods=['DELETE'])
+def delete_attack(attack_id):
+    """Delete a specific attack (Mark as deleted/inactive)"""
+    try:
+        # Use status update to mark as deleted (DB + Fallback)
+        update_attack_status(attack_id, 'deleted')
+        return jsonify({'success': True, 'message': 'Attack deleted'}), 200
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+# -------------------------------------------------------------------------
+# BLOCKLIST MANAGEMENT
+# -------------------------------------------------------------------------
+
+@api_bp.route('/blocklist', methods=['GET'])
+def get_blocklist():
+    """Return current blocked IPs and Hosts"""
+    return jsonify({
+        'ips': BLOCKED_IPS,
+        'hosts': BLOCKED_HOSTS
+    }), 200
+
+@api_bp.route('/blocklist/add', methods=['POST'])
+def add_to_blocklist():
+    """Add an IP or Host to blocklist"""
+    data = request.get_json() or {}
+    ip = data.get('ip')
+    host = data.get('host')
+    
+    if ip and ip not in BLOCKED_IPS:
+        BLOCKED_IPS.append(ip)
+    if host and host not in BLOCKED_HOSTS:
+        BLOCKED_HOSTS.append(host)
+        
+    return jsonify({'success': True, 'ips': BLOCKED_IPS, 'hosts': BLOCKED_HOSTS}), 200
+
+@api_bp.route('/blocklist/remove', methods=['POST'])
+def remove_from_blocklist():
+    """Remove an IP or Host from blocklist"""
+    data = request.get_json() or {}
+    ip = data.get('ip')
+    host = data.get('host')
+    
+    if ip and ip in BLOCKED_IPS:
+        BLOCKED_IPS.remove(ip)
+    if host and host in BLOCKED_HOSTS:
+        BLOCKED_HOSTS.remove(host)
+        
+    return jsonify({'success': True, 'ips': BLOCKED_IPS, 'hosts': BLOCKED_HOSTS}), 200

@@ -1,10 +1,17 @@
 from integrations.supabase import supabase
+from datetime import datetime, timedelta
 
-def create_alert(message, severity='low', source=None):
+def get_baghdad_time():
+    from datetime import timezone
+    tz = timezone(timedelta(hours=3))
+    return datetime.now(tz).isoformat()
+
+def create_alert(message, severity='low', source=None, created_at=None):
     return supabase.table('alerts').insert({
         'message': message,
         'severity': severity,
-        'source': source
+        'source': source,
+        'created_at': created_at or get_baghdad_time()
     }).execute()
 
 def get_alerts():
