@@ -241,35 +241,41 @@ def vulnerable_xxe():
     # SIMULATION: Manually handle XXE for training purposes 🎓
     # Standard Python ElementTree is safe by default.
     # ========================================================
-    import re
-    # Match: <!ENTITY name SYSTEM "file:///path">
-    # We use a unique variable name to avoid any conflicts
-    xxe_pattern = re.search(r'<!ENTITY\s+(\w+)\s+SYSTEM\s+["\']file://(.*?)["\']\s*>', xml_data)
+    # Improved XXE pattern for better compatibility
+    xxe_pattern = re.search(r'<!ENTITY\s+(\w+)\s+SYSTEM\s+["\'](?:file://|file:)?(.*?)["\']\s*>', xml_data, re.IGNORECASE)
     
     if xxe_pattern:
         entity_name = xxe_pattern.group(1)
         file_path = xxe_pattern.group(2)
         
-        # Windows path fix: remove leading slash if it looks like /C:/
+        # Normalize paths for Windows/Linux
+        if file_path.startswith('///'):
+            file_path = file_path[2:]
         if os.name == 'nt' and file_path.startswith('/') and ':' in file_path:
             file_path = file_path.lstrip('/')
             
         try:
-            if os.path.exists(file_path):
+            content = None
+            if os.path.exists(file_path) and os.path.isfile(file_path):
                 with open(file_path, 'r', errors='ignore') as f:
                     content = f.read()
-                
+            elif file_path in ['/etc/passwd', 'etc/passwd'] and os.path.exists('/etc/passwd'):
+                with open('/etc/passwd', 'r') as f:
+                    content = f.read()
+            
+            if content is not None:
                 # Check if the entity is actually used in the body
                 if f'&{entity_name};' in xml_data:
                     return jsonify({
                         'content': content,
                         'message': 'XXE Vulnerability Exploited Successfully! 🔓',
-                        'file_read': file_path
+                        'file_read': file_path,
+                        'status': 'real_data_extracted'
                     }), 200
             else:
-                return jsonify({'error': f'File not found: {file_path}'}), 404
+                return jsonify({'error': f'File not found or inaccessible: {file_path}'}), 404
         except Exception as e:
-            return jsonify({'error': f'Access denied to file: {str(e)}'}), 500
+            return jsonify({'error': f'Access denied: {str(e)}'}), 500
 
     try:
         root = ET.fromstring(xml_data)

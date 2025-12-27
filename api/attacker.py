@@ -459,24 +459,50 @@ def vulnerable_xxe():
         response_content = "XML Processed Successfully"
         extracted_path = "Unknown"
         
-        # Check for XXE pattern
-        # Match: <!ENTITY name SYSTEM "file:///path">
-        xxe_match = re.search(r'<!ENTITY\s+(\w+)\s+SYSTEM\s+["\']file://(.*?)["\']\s*>', xml_data)
+        # Flexible XXE pattern to catch direct file paths and various protocols
+        # Matches: <!ENTITY name SYSTEM "file:///etc/passwd"> or <!ENTITY xxe SYSTEM "/etc/passwd">
+        xxe_match = re.search(r'<!ENTITY\s+(\w+)\s+SYSTEM\s+["\'](?:file://|file:)?(.*?)["\']\s*>', xml_data, re.IGNORECASE)
         
         if xxe_match:
             extracted_path = xxe_match.group(2)
-            # Fix windows mix-ups if needed (e.g. /c:/windows...)
-            if extracted_path.startswith('/'):
-                 if len(extracted_path) > 3 and extracted_path[2] == ':':
+            
+            # Clean up the path for different OS environments
+            if extracted_path.startswith('///'):
+                extracted_path = extracted_path[2:]
+            
+            if os.name == 'nt': # Windows Support
+                 if extracted_path.startswith('/') and len(extracted_path) > 3 and extracted_path[2] == ':':
                      extracted_path = extracted_path.lstrip('/')
-                 
+            
             try:
-                # TRY REAL FILE READ FIRST
+                # 1. Attempt to read the SPECIFIC real file requested
                 if os.path.exists(extracted_path) and os.path.isfile(extracted_path):
+                    # PythonAnywhere allows reading many system files if permissions permit
                     with open(extracted_path, 'r', encoding='utf-8', errors='ignore') as f:
                         response_content = f.read()
+                
+                # 2. PythonAnywhere / Linux specific high-fidelity targets
+                elif extracted_path in ['/etc/passwd', 'etc/passwd']:
+                    if os.path.exists('/etc/passwd'):
+                         with open('/etc/passwd', 'r') as f:
+                             response_content = f.read()
+                    else:
+                         # Fallback to realistic-looking data if file exists check fails (safety/permissions)
+                         response_content = "root:x:0:0:root:/root:/bin/bash\ndaemon:x:1:1:daemon:/usr/sbin:/usr/sbin/nologin\nbin:x:2:2:bin:/bin:/usr/sbin/nologin"
+
+                # 3. Environment Leak (Real keys if on PythonAnywhere)
+                elif 'env' in extracted_path.lower() or 'config' in extracted_path.lower():
+                    # Look for .env in current directory
+                    env_path = os.path.join(os.getcwd(), '.env')
+                    if os.path.exists(env_path):
+                        with open(env_path, 'r') as f:
+                            response_content = f.read()
+                    else:
+                        # Return realistic environment variables (Safe for demo/education)
+                        response_content = f"DB_HOST={os.getenv('DB_HOST', 'localhost')}\nSUPABASE_URL={os.getenv('SUPABASE_URL', 'https://rglrvnsfmmjlzbofpnas.supabase.co')}\nAPI_KEY=sb_publishable_redacted\nDEBUG=False"
+
                 else:
-                    # HIGH FIDELITY SIMULATED DUMP (PREMIUM FORENSIC OUTPUT)
+                    # Fallback to high-fidelity simulation if file not found or inaccessible
                     current_time = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                     response_content = f"""
 ================================================================================
