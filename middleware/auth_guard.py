@@ -13,7 +13,7 @@ class AuthGuardMiddleware:
         def check_auth():
             # Skip auth check for OPTIONS requests (CORS preflight)
             if request.method == 'OPTIONS':
-                return
+                return '', 204
 
             # Skip auth check for certain endpoints
             public_endpoints = [

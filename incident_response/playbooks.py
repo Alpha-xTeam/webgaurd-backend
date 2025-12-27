@@ -106,9 +106,9 @@ class DomainIPBlacklistPlaybook(SecurityPlaybook):
         """Update Windows Firewall or Linux iptables to block IP"""
         try:
             # Windows Firewall
-            if subprocess.run("where netsh", shell=True, capture_output=True).returncode == 0:
+            if subprocess.run("where netsh", shell=True, capture_output=True, timeout=2).returncode == 0:
                 cmd = f'netsh advfirewall firewall add rule name="Block_{self.target_ip}" dir=in action=block remoteip={self.target_ip}'
-                result = subprocess.run(cmd, shell=True, capture_output=True, text=True)
+                result = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=2)
                 
                 if result.returncode == 0:
                     self.log_action("Firewall update", "success", "Windows Firewall rule added")
@@ -119,8 +119,13 @@ class DomainIPBlacklistPlaybook(SecurityPlaybook):
             
             # Linux iptables (if on Linux)
             else:
+                import os
+                if os.name != 'nt' and os.getuid() != 0:
+                    self.log_action("Firewall update", "skipped", "Permission denied (not root)")
+                    return {"success": True, "method": "skipped", "reason": "not_root"}
+
                 cmd = f'sudo iptables -A INPUT -s {self.target_ip} -j DROP'
-                result = subprocess.run(cmd, shell=True, capture_output=True, text=True)
+                result = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=2)
                 
                 if result.returncode == 0:
                     self.log_action("Firewall update", "success", "iptables rule added")
@@ -163,7 +168,7 @@ class DomainIPBlacklistPlaybook(SecurityPlaybook):
                 # Try different DNS services
                 services = ["systemd-resolved", "dnsmasq", "bind9"]
                 for service in services:
-                    result = subprocess.run(f"systemctl restart {service}", shell=True, capture_output=True)
+                    result = subprocess.run(f"systemctl restart {service}", shell=True, capture_output=True, timeout=1)
                     if result.returncode == 0:
                         self.log_action("DNS cache clear", "success", f"Restarted {service}")
                         return {"success": True, "method": "linux", "service": service}
@@ -409,9 +414,9 @@ class MaliciousProcessTerminationPlaybook(SecurityPlaybook):
         """Scan for the target process"""
         try:
             # Windows process scan
-            if subprocess.run("where tasklist", shell=True, capture_output=True).returncode == 0:
+            if subprocess.run("where tasklist", shell=True, capture_output=True, timeout=2).returncode == 0:
                 cmd = f'tasklist /fi "imagename eq {self.target}" /fo csv'
-                result = subprocess.run(cmd, shell=True, capture_output=True, text=True)
+                result = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=2)
                 
                 if result.returncode == 0 and self.target in result.stdout:
                     self.log_action("Process scan", "success", f"Found process {self.target} running")
@@ -423,7 +428,7 @@ class MaliciousProcessTerminationPlaybook(SecurityPlaybook):
             # Linux process scan
             else:
                 cmd = f'ps aux | grep "{self.target}" | grep -v grep'
-                result = subprocess.run(cmd, shell=True, capture_output=True, text=True)
+                result = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=2)
                 
                 if result.stdout.strip():
                     self.log_action("Process scan", "success", f"Found process {self.target} running")

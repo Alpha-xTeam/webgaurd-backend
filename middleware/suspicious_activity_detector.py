@@ -50,6 +50,9 @@ class SuspiciousActivityDetector:
     
     def before_request(self):
         """Run before each request"""
+        if request.method == 'OPTIONS':
+            return
+            
         if request.endpoint and (request.endpoint.startswith('static') or request.path == '/favicon.ico'):
             return  # Skip static files and favicon
         
@@ -81,7 +84,10 @@ class SuspiciousActivityDetector:
         })
         
         # Check for suspicious activity
-        self.check_suspicious_activity(user_email, ip_address, request)
+        try:
+            self.check_suspicious_activity(user_email, ip_address, request)
+        except Exception as e:
+            logger.error(f"Error checking suspicious activity: {e}")
     
     def after_request(self, response):
         """Run after each request"""
