@@ -1,6 +1,9 @@
 from flask import Blueprint, jsonify, request
 from middleware.auth_guard import require_auth
 from api.attacker import BLOCKED_IPS, BLOCKED_HOSTS
+from models.incident import get_incidents, create_incident, update_incident_status
+from models.incident_response import create_incident_response
+from integrations.supabase import supabase
 import datetime
 import subprocess
 import os
@@ -9,39 +12,43 @@ import shlex
 
 api_bp = Blueprint('security', __name__)
 
-# Storage for escalated alerts to Tier 2
-TIER2_ESCALATIONS = []
-
 @api_bp.route('/escalate-to-tier2', methods=['POST'])
 @require_auth
 def escalate_to_tier2():
-    """Receive escalation from Tier 1 and notify Tier 2"""
+    """Receive escalation from Tier 1 and notify Tier 2 (Saves to Incidents)"""
     try:
         data = request.get_json()
+        incident_id = data.get('incident_id')
         
-        escalation = {
-            'id': f"ESC-{len(TIER2_ESCALATIONS) + 1}",
-            'alert_id': data.get('alert_id'),
-            'attack_type': data.get('attack_type'),
-            'severity': data.get('severity'),
-            'source_ip': data.get('source_ip'),
-            'target_url': data.get('target_url'),
-            'analyst_notes': data.get('analyst_notes'),
-            'analyst_name': data.get('analyst_name'),
-            'playbook_completion': data.get('playbook_completion', 0),
-            'escalated_at': data.get('escalated_at'),
-            'status': 'pending_tier2_review',
-            'raw_data': data.get('raw_data')
+        if incident_id:
+            # Update existing incident
+            update_incident_status(incident_id, 'pending_tier2')
+            # Add note to description or just return
+            return jsonify({
+                "success": True,
+                "message": "Incident moved to Tier 2"
+            }), 200
+        
+        # Fallback: create new incident if no ID (for legacy/custom alerts)
+        incident_data = {
+            'title': f"Escalated: {data.get('attack_type', 'Security Alert')}",
+            'description': data.get('analyst_notes', 'No notes provided.'),
+            'severity': data.get('severity', 'high'),
+            'status': 'pending_tier2',
+            'created_at': data.get('escalated_at') or datetime.datetime.utcnow().isoformat()
         }
         
-        TIER2_ESCALATIONS.append(escalation)
-        
-        # Escalation logged internally
+        res = create_incident(
+            title=incident_data['title'],
+            description=f"Source IP: {data.get('source_ip')}\nTarget URL: {data.get('target_url')}\n\nNotes: {incident_data['description']}",
+            severity=incident_data['severity'],
+            created_at=incident_data['created_at']
+        )
         
         return jsonify({
             "success": True,
-            "message": "Alert escalated to Tier 2 successfully",
-            "escalation_id": escalation['id']
+            "message": "Alert escalated to Tier 2 (Incident Created)",
+            "incident": res.data[0] if res.data else None
         }), 200
         
     except Exception as e:
@@ -54,11 +61,13 @@ def escalate_to_tier2():
 @api_bp.route('/tier2/escalations', methods=['GET'])
 @require_auth
 def get_tier2_escalations():
-    """Get all pending escalations for Tier 2"""
+    """Get all pending escalations for Tier 2 from Incidents table"""
     try:
+        # Fetch from incidents table where status like tier2
+        res = supabase.table('incidents').select('*').or_('status.eq.pending_tier2,status.eq.investigating').execute()
         return jsonify({
             "success": True,
-            "escalations": TIER2_ESCALATIONS
+            "escalations": res.data
         }), 200
     except Exception as e:
         return jsonify({
@@ -66,42 +75,23 @@ def get_tier2_escalations():
             "error": str(e)
         }), 500
 
-# Storage for escalated alerts to Tier 3 (CSIRT)
-TIER3_ESCALATIONS = []
-
 @api_bp.route('/escalate-to-tier3', methods=['POST'])
 @require_auth
 def escalate_to_tier3():
-    """Receive escalation from Tier 2 and notify Tier 3 (CSIRT)"""
+    """Receive escalation from Tier 2 and notify Tier 3 (Saves to Incidents)"""
     try:
         data = request.get_json()
+        case_id = data.get('case_id') or data.get('incident_id')
         
-        escalation = {
-            'id': f"CSIRT-{len(TIER3_ESCALATIONS) + 1}",
-            'tier2_case_id': data.get('case_id'),
-            'attack_type': data.get('attack_type'),
-            'severity': data.get('severity'),
-            'source_ip': data.get('source_ip'),
-            'analyst_notes_tier1': data.get('notes_tier1'),
-            'analyst_notes_tier2': data.get('notes_tier2'),
-            'tier2_analyst': data.get('analyst_name'),
-            'forensics_data': data.get('forensics_data'),
-            'escalated_at': datetime.datetime.utcnow().isoformat(),
-            'status': 'pending_csirt_review',
-            'raw_data': data.get('raw_data')
-        }
-        
-        TIER3_ESCALATIONS.append(escalation)
-        
-        # Escalation to CSIRT logged internally
-        
-        # Remove from Tier 2 list (optional, assuming we move it)
-        # In a real DB we would just update the status_id
+        if not case_id:
+            return jsonify({"success": False, "error": "Case ID required"}), 400
+
+        # Update incident status to tier3
+        update_incident_status(case_id, 'pending_tier3')
         
         return jsonify({
             "success": True,
-            "message": "Case escalated to CSIRT (Tier 3) successfully",
-            "escalation_id": escalation['id']
+            "message": "Case escalated to CSIRT (Tier 3) successfully"
         }), 200
         
     except Exception as e:
@@ -114,11 +104,12 @@ def escalate_to_tier3():
 @api_bp.route('/tier3/escalations', methods=['GET'])
 @require_auth
 def get_tier3_escalations():
-    """Get all pending escalations for Tier 3"""
+    """Get all pending escalations for Tier 3 from Incidents table"""
     try:
+        res = supabase.table('incidents').select('*').eq('status', 'pending_tier3').execute()
         return jsonify({
             "success": True,
-            "escalations": TIER3_ESCALATIONS
+            "escalations": res.data
         }), 200
     except Exception as e:
         return jsonify({
@@ -126,91 +117,16 @@ def get_tier3_escalations():
             "error": str(e)
         }), 500
 
-# Mock security alerts data
-MOCK_ALERTS_LEVEL1 = [
-    {
-        "id": 1,
-        "type": "suspicious_login",
-        "severity": "medium",
-        "source": "login_system",
-        "description": "Multiple failed login attempts from IP 192.168.1.100",
-        "timestamp": "2025-01-15T10:30:00Z",
-        "status": "new",
-        "userId": "user123"
-    },
-    {
-        "id": 2,
-        "type": "unusual_activity",
-        "severity": "low",
-        "source": "user_profile",
-        "description": "User accessed profile page 50 times in 5 minutes",
-        "timestamp": "2025-01-15T09:15:00Z",
-        "status": "investigating",
-        "userId": "user456"
-    }
-]
-
-MOCK_ALERTS_LEVEL2 = [
-    {
-        "id": 3,
-        "type": "sql_injection",
-        "severity": "high",
-        "source": "sports_news_search",
-        "description": "SQL injection attempt detected in sports news search",
-        "timestamp": "2025-01-15T11:45:00Z",
-        "status": "new",
-        "userId": "attacker@example.com"
-    },
-    {
-        "id": 4,
-        "type": "xss_attempt",
-        "severity": "high",
-        "source": "sports_news_comments",
-        "description": "Cross-site scripting attempt in article comments",
-        "timestamp": "2025-01-15T10:20:00Z",
-        "status": "escalated",
-        "userId": "hacker@test.com"
-    }
-]
-
-MOCK_ALERTS_LEVEL3 = [
-    {
-        "id": 5,
-        "type": "data_breach",
-        "severity": "critical",
-        "source": "database_server",
-        "description": "Potential data breach detected - unauthorized database access",
-        "timestamp": "2025-01-15T12:00:00Z",
-        "status": "new",
-        "userId": "system"
-    }
-]
-
-MOCK_INCIDENTS = [
-    {
-        "id": 1,
-        "title": "SQL Injection Attack Campaign",
-        "severity": "major",
-        "status": "active",
-        "assignedTo": "sec_team_lead",
-        "createdAt": "2025-01-15T08:00:00Z",
-        "description": "Coordinated SQL injection attacks targeting multiple endpoints",
-        "timeline": [
-            {"timestamp": "2025-01-15T08:00:00Z", "description": "Initial detection"},
-            {"timestamp": "2025-01-15T09:30:00Z", "description": "Pattern analysis completed"},
-            {"timestamp": "2025-01-15T11:00:00Z", "description": "Escalated to Level 3"}
-        ]
-    }
-]
-
 @api_bp.route('/alerts/level1', methods=['GET'])
 @require_auth
 def get_level1_alerts():
-    """Get alerts for Level 1 security operations"""
+    """Get alerts for Level 1 - Now synchronized with Incidents and Attacks"""
     try:
+        # Tier 1 usually sees new incidents
+        res = supabase.table('incidents').select('*').eq('status', 'new').execute()
         return jsonify({
             "success": True,
-            "alerts": MOCK_ALERTS_LEVEL1
+            "alerts": res.data
         })
     except Exception as e:
         return jsonify({
@@ -218,37 +134,7 @@ def get_level1_alerts():
             "error": str(e)
         }), 500
 
-@api_bp.route('/alerts/level2', methods=['GET'])
-@require_auth
-def get_level2_alerts():
-    """Get alerts for Level 2 security operations"""
-    try:
-        return jsonify({
-            "success": True,
-            "alerts": MOCK_ALERTS_LEVEL2
-        })
-    except Exception as e:
-        return jsonify({
-            "success": False,
-            "error": str(e)
-        }), 500
-
-@api_bp.route('/alerts/level3', methods=['GET'])
-@require_auth
-def get_level3_alerts():
-    """Get alerts for Level 3 security operations"""
-    try:
-        return jsonify({
-            "success": True,
-            "alerts": MOCK_ALERTS_LEVEL3
-        })
-    except Exception as e:
-        return jsonify({
-            "success": False,
-            "error": str(e)
-        }), 500
-
-@api_bp.route('/alerts/<int:alert_id>/action', methods=['POST'])
+@api_bp.route('/alerts/<alert_id>/action', methods=['POST'])
 @require_auth
 def handle_alert_action(alert_id):
     """Handle alert actions (investigate, escalate, resolve)"""
@@ -256,10 +142,13 @@ def handle_alert_action(alert_id):
         data = request.get_json()
         action = data.get('action')
 
-        if action not in ['investigate', 'escalate', 'resolve', 'analyze']:
-            return jsonify({"success": False, "error": "Invalid action"}), 400
-
-        # In a real system, this would update the alert status in database
+        if action == 'resolve':
+            update_incident_status(alert_id, 'resolved')
+            # Log to incident_responses
+            create_incident_response(alert_id, 'Resolved by Analyst', 'SOC-Analyst')
+        elif action == 'escalate':
+            update_incident_status(alert_id, 'pending_tier2')
+        
         return jsonify({
             "success": True,
             "message": f"Alert {alert_id} {action} action completed"
@@ -270,75 +159,15 @@ def handle_alert_action(alert_id):
             "error": str(e)
         }), 500
 
-@api_bp.route('/stats/level1', methods=['GET'])
-@require_auth
-def get_level1_stats():
-    """Get statistics for Level 1 security operations"""
-    try:
-        return jsonify({
-            "success": True,
-            "stats": {
-                "totalAlerts": 15,
-                "criticalAlerts": 2,
-                "resolvedAlerts": 8,
-                "escalatedAlerts": 3
-            }
-        })
-    except Exception as e:
-        return jsonify({
-            "success": False,
-            "error": str(e)
-        }), 500
-
-@api_bp.route('/stats/level2', methods=['GET'])
-@require_auth
-def get_level2_stats():
-    """Get statistics for Level 2 security operations"""
-    try:
-        return jsonify({
-            "success": True,
-            "stats": {
-                "totalAlerts": 8,
-                "criticalAlerts": 3,
-                "resolvedAlerts": 4,
-                "escalatedAlerts": 2
-            }
-        })
-    except Exception as e:
-        return jsonify({
-            "success": False,
-            "error": str(e)
-        }), 500
-
-@api_bp.route('/stats/level3', methods=['GET'])
-@require_auth
-def get_level3_stats():
-    """Get statistics for Level 3 security operations"""
-    try:
-        return jsonify({
-            "success": True,
-            "stats": {
-                "totalAlerts": 3,
-                "criticalAlerts": 2,
-                "resolvedAlerts": 1,
-                "escalatedAlerts": 0,
-                "activeIncidents": 1
-            }
-        })
-    except Exception as e:
-        return jsonify({
-            "success": False,
-            "error": str(e)
-        }), 500
-
 @api_bp.route('/incidents', methods=['GET'])
 @require_auth
-def get_incidents():
-    """Get active security incidents"""
+def get_all_incidents():
+    """Get active security incidents from Supabase"""
     try:
+        res = get_incidents()
         return jsonify({
             "success": True,
-            "incidents": MOCK_INCIDENTS
+            "incidents": res.data
         })
     except Exception as e:
         return jsonify({
@@ -346,40 +175,25 @@ def get_incidents():
             "error": str(e)
         }), 500
 
-@api_bp.route('/incidents/<int:incident_id>/action', methods=['POST'])
+@api_bp.route('/incidents/<incident_id>/action', methods=['POST'])
 @require_auth
 def handle_incident_action(incident_id):
-    """Handle incident actions (escalate, resolve)"""
+    """Handle incident actions (resolve, move to response table)"""
     try:
         data = request.get_json()
         action = data.get('action')
 
-        if action not in ['escalate', 'resolve']:
-            return jsonify({"success": False, "error": "Invalid action"}), 400
-
-        # In a real system, this would update the incident status in database
+        if action == 'resolve':
+            # 1. Add to incident_responses
+            create_incident_response(incident_id, 'Resolution Confirmed', 'Lead-Analyst')
+            # 2. Update incident status
+            update_incident_status(incident_id, 'resolved')
+            # 3. Optional: Delete from incidents if user wants 'deletion from list'
+            # supabase.table('incidents').delete().eq('id', incident_id).execute()
+        
         return jsonify({
             "success": True,
             "message": f"Incident {incident_id} {action} action completed"
-        })
-    except Exception as e:
-        return jsonify({
-            "success": False,
-            "error": str(e)
-        }), 500
-
-@api_bp.route('/alerts', methods=['POST'])
-@require_auth
-def create_alert():
-    """Create new security alert (called by frontend attack detection)"""
-    try:
-        data = request.get_json()
-
-        # Alert logged successfully
-
-        return jsonify({
-            "success": True,
-            "message": "Alert logged successfully"
         })
     except Exception as e:
         return jsonify({
@@ -398,15 +212,10 @@ def terminal_execute():
         if not command:
             return jsonify({"success": False, "error": "No command provided"}), 400
         
-        # Mapping common Unix commands to Windows equivalents if needed
-        # But user wants "real", so we let the shell handle it.
-        # If on Windows, we'll try to use powershell if available, else cmd.
-        
         is_windows = platform.system() == "Windows"
         
         try:
             if is_windows:
-                # Use powershell for better command compatibility (ls, pwd, etc work in PS)
                 process = subprocess.Popen(
                     ["powershell", "-Command", command],
                     stdout=subprocess.PIPE,
@@ -415,7 +224,6 @@ def terminal_execute():
                     shell=True
                 )
             else:
-                # Unix/Linux
                 process = subprocess.Popen(
                     command,
                     stdout=subprocess.PIPE,
@@ -425,22 +233,17 @@ def terminal_execute():
                 )
             
             stdout, stderr = process.communicate(timeout=10)
-            
             output = stdout if stdout else stderr
-            if not output and process.returncode == 0:
-                output = "[Command executed successfully with no output]"
-            elif not output and process.returncode != 0:
-                output = f"[Command failed with exit code {process.returncode}]"
-                
+            
             return jsonify({
                 "success": True, 
-                "output": output,
+                "output": output or "[Success]",
                 "returncode": process.returncode
             })
             
         except subprocess.TimeoutExpired:
             process.kill()
-            return jsonify({"success": True, "output": "Error: Command timed out (10s limit)"})
+            return jsonify({"success": True, "output": "Error: Command timed out"})
         except Exception as e:
             return jsonify({"success": True, "output": f"Error: {str(e)}"})
 
@@ -450,7 +253,7 @@ def terminal_execute():
 @api_bp.route('/blocklist', methods=['GET'])
 @require_auth
 def get_soc_blocklist():
-    """Get the current global blocklist for SOC management"""
+    """Get the current global blocklist from memory/cache (sync with DB if possible)"""
     return jsonify({
         "success": True,
         "ips": BLOCKED_IPS,
@@ -460,47 +263,32 @@ def get_soc_blocklist():
 @api_bp.route('/blocklist/add', methods=['POST'])
 @require_auth
 def add_to_blocklist():
-    """Add an IP or Host to the blocklist"""
+    """Add to blocklist and persist in DB"""
     try:
         data = request.get_json()
         ip = data.get('ip')
         host = data.get('host')
         
-        if ip and ip not in BLOCKED_IPS:
-            BLOCKED_IPS.append(ip)
+        if ip:
+            if ip not in BLOCKED_IPS: BLOCKED_IPS.append(ip)
+            supabase.table('blocked_ips').upsert({'ip_address': ip, 'reason': 'Manual SOC blocking'}).execute()
         if host and host not in BLOCKED_HOSTS:
             BLOCKED_HOSTS.append(host)
             
-        return jsonify({
-            "success": True, 
-            "message": "Successfully added to blocklist",
-            "ips": BLOCKED_IPS,
-            "hosts": BLOCKED_HOSTS
-        })
+        return jsonify({"success": True, "message": "Added to blocklist"})
     except Exception as e:
         return jsonify({"success": False, "error": str(e)}), 500
 
 @api_bp.route('/blocklist/remove', methods=['POST'])
 @require_auth
 def remove_from_blocklist():
-    """Remove an IP or Host from the blocklist"""
+    """Remove from blocklist"""
     try:
         data = request.get_json()
         ip = data.get('ip')
-        host = data.get('host')
-        
-        removed = False
         if ip and ip in BLOCKED_IPS:
             BLOCKED_IPS.remove(ip)
-            removed = True
-        if host and host in BLOCKED_HOSTS:
-            BLOCKED_HOSTS.remove(host)
-            removed = True
-            
-        if removed:
-            return jsonify({"success": True, "message": "Successfully removed from blocklist"})
-        else:
-            return jsonify({"success": False, "error": "Item not found in blocklist"})
-            
+            supabase.table('blocked_ips').delete().eq('ip_address', ip).execute()
+        return jsonify({"success": True, "message": "Removed from blocklist"})
     except Exception as e:
         return jsonify({"success": False, "error": str(e)}), 500

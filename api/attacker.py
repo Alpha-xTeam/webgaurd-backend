@@ -256,6 +256,12 @@ def vulnerable_404():
                 source='Vulnerability Scanner',
                 created_at=get_baghdad_time()
             )
+
+            safe_create_incident(
+                title=f'XSS Attack Detected',
+                description=f'Cross-Site Scripting attempt from IP {attacker_ip}. Payload: {user_input}',
+                severity='high'
+            )
         
         return jsonify({
             'error': 'Page not found',
@@ -366,6 +372,12 @@ def vulnerable_path_traversal():
                     severity='critical',
                     source='File Monitor'
                 )
+
+                safe_create_incident(
+                    title=f'Path Traversal - Sensitive File Access',
+                    description=f'Unauthorized attempt to read file: {file_path}. Resolved to: {target_abs_path}. Source IP: {attacker_ip}',
+                    severity='critical'
+                )
                 
                 return Response(content, mimetype='text/plain')
             else:
@@ -414,6 +426,12 @@ def vulnerable_ssrf():
                 target_url=request.url
             )
             safe_create_alert(message=f'🔴 SSRF Attack: Request to internal/external service {url} leaked data', severity='high', source='Network Monitor')
+
+            safe_create_incident(
+                title=f'SSRF Attack - Internal Proxy Attempt',
+                description=f'Server-Side Request Forgery attempt to target: {url}. Source IP: {attacker_ip}',
+                severity='high'
+            )
 
             return jsonify(result_data), 200
         except Exception as fetch_err:
@@ -573,6 +591,12 @@ def vulnerable_rce():
                 target_url=request.url
             )
             safe_create_alert(message=f'🔴 CRITICAL: RCE Exploited! Command "{command}" executed successfully', severity='critical', source='Server OS')
+
+            safe_create_incident(
+                title=f'Remote Code Execution (RCE)',
+                description=f'Command successfully executed on server: {command}. Source IP: {attacker_ip}',
+                severity='critical'
+            )
 
             return jsonify({
                 'status': 'executed',
