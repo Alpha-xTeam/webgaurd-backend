@@ -1,4 +1,4 @@
-from ..integrations.supabase import supabase
+from integrations.supabase import supabase
 
 def create_playbook(name, description, steps, created_by=None):
     return supabase.table('playbooks').insert({

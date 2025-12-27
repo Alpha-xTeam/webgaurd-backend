@@ -1,4 +1,4 @@
-from ..integrations.supabase import supabase
+from integrations.supabase import supabase
 
 def create_incident_response(incident_id, action, performed_by):
     return supabase.table('incident_responses').insert({

@@ -1,4 +1,4 @@
-from ..integrations.supabase import supabase
+from integrations.supabase import supabase
 
 def create_honeypot_log(trap_name, ip_address, user_agent, request_data):
     return supabase.table('honeypot_logs').insert({
