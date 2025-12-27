@@ -35,10 +35,11 @@ def get_all_attacks():
     """Get all attack logs from DB"""
     try:
         db_attacks = supabase.table('attacks').select('*').order('detected_at', desc=True).execute().data
-    except:
+    except Exception as e:
+        print(f"Error fetching all attacks: {e}")
         db_attacks = []
         
-    all_attacks = db_attacks
+    all_attacks = db_attacks or []
     # Sort by detected_at desc
     all_attacks.sort(key=lambda x: x.get('detected_at', ''), reverse=True)
     
@@ -53,7 +54,7 @@ def get_active_attacks():
     except:
         db_attacks = []
         
-    all_attacks = db_attacks
+    all_attacks = db_attacks or []
     all_attacks.sort(key=lambda x: x.get('detected_at', ''), reverse=True)
     
     class DummyResponse:
@@ -143,21 +144,27 @@ def clear_all_attacker_data():
     
     for table in tables_to_clear:
         try:
-            # More reliable way to delete all rows in Supabase/PostgREST
-            # We use a filter that is always true for any existing row
-            supabase.table(table).delete().gt('created_at', '1970-01-01T00:00:00Z').execute()
-            print(f"✅ Table '{table}' purged via created_at.")
+            # POSTGREST DELETE WITHOUT FILTER IS NOT ALLOWED
+            # We use a filter that is always true. 
+            # For UUID 'id', we can use .neq('id', '00000000-0000-0000-0000-000000000000')
+            res = supabase.table(table).delete().neq('id', '00000000-0000-0000-0000-000000000000').execute()
+            print(f"✅ Table '{table}' purged. Deleted rows: {len(res.data) if res.data else 0}")
         except Exception as e:
+            print(f"❌ Error purging table '{table}': {str(e)}")
             try:
-                # Fallback to id check if created_at is not available or fails
-                supabase.table(table).delete().neq('id', '00000000-0000-0000-0000-000000000001').execute()
-                print(f"✅ Table '{table}' purged via ID neq.")
+                # Secondary attempt using a broad timestamp filter
+                res = supabase.table(table).delete().gt('created_at', '1970-01-01T00:00:00Z').execute()
+                print(f"✅ Table '{table}' purged (retry via created_at).")
             except Exception as e2:
-                print(f"ℹ️ Clear for {table} failed: {str(e2)}")
+                print(f"ℹ️ Fully failed to clear table {table}: {str(e2)}")
 
-    # 3. Reset local global variables if accessed via this process
-    from api.attacker import STORED_SEARCHES, STOLEN_DATA
-    STORED_SEARCHES.clear()
-    STOLEN_DATA.clear()
+    # Reset local global variables
+    try:
+        from api.attacker import STORED_SEARCHES, STOLEN_DATA
+        STORED_SEARCHES.clear()
+        STOLEN_DATA.clear()
+        print("✅ Local session memory cleared.")
+    except Exception as e:
+        print(f"ℹ️ Local memory clear skipped: {e}")
     
     return True
