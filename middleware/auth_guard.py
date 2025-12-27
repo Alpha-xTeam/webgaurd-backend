@@ -13,7 +13,13 @@ class AuthGuardMiddleware:
         def check_auth():
             # Skip auth check for OPTIONS requests (CORS preflight)
             if request.method == 'OPTIONS':
-                return '', 204
+                from flask import make_response
+                response = make_response('', 200)
+                response.headers['Access-Control-Allow-Origin'] = '*'
+                response.headers['Access-Control-Allow-Methods'] = 'GET, POST, PUT, DELETE, OPTIONS, PATCH'
+                response.headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization, X-User-Email'
+                response.headers['Access-Control-Max-Age'] = '86400'
+                return response
 
             # Skip auth check for certain endpoints
             public_endpoints = [

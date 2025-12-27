@@ -27,7 +27,7 @@ def create_app(config_class=Config):
 
     # Enable CORS with full support for all HTTP methods
     CORS(app, 
-         origins='*',
+         resources={r"/api/*": {"origins": "*"}},
          allow_headers=['Content-Type', 'Authorization', 'X-User-Email'],
          methods=['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'PATCH'])
 
