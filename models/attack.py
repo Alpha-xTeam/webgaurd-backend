@@ -215,26 +215,43 @@ def delete_attack(attack_id):
     return True
 
 def clear_all_attacker_data():
-    """Delete ALL attacks, alerts, and incidents from DB and Fallback (Persistent Clear)"""
-    print("🧹 Starting full purge of attacker data...")
+    """Nuclear purge of ALL security data across all tables"""
+    print("🧹 Starting deep purge of security data...")
     
-    # 1. Purge from DB
-    tables_to_clear = ['attacks', 'alerts', 'incidents', 'incident_responses', 'blocked_ips']
+    # All possible tables that might store attack/security data
+    tables_to_clear = [
+        'attacks', 
+        'alerts', 
+        'incidents', 
+        'incident_responses', 
+        'blocked_ips', 
+        'security_alerts',
+        'honeypot_logs',
+        'network_logs'
+    ]
+    
     for table in tables_to_clear:
         try:
-            # Delete everything where ID is not null (guaranteed to catch everything)
-            supabase.table(table).delete().neq('id', '00000000-0000-0000-0000-000000000000').execute()
-            print(f"✅ Supabase '{table}' table purged.")
+            # Use neq to target all rows (standard Supabase pattern for 'delete all')
+            # Using multiple common ID columns just in case
+            supabase.table(table).delete().neq('id', '00000000-0000-0000-0000-000000000001').execute()
+            print(f"✅ Table '{table}' purged.")
         except Exception as e:
-            print(f"❌ DB clear failed for {table}: {e}")
+            # Table might not exist, that's okay
+            print(f"ℹ️ Clear for {table} skipped or failed: {str(e)}")
 
-    # 2. Clear from Fallback
+    # 3. Reset local global variables if accessed via this process
+    from api.attacker import STORED_SEARCHES, STOLEN_DATA
+    STORED_SEARCHES.clear()
+    STOLEN_DATA.clear()
+
+    # 4. Clear Fallback JSON file
     try:
         if os.path.exists(FALLBACK_FILE):
             with open(FALLBACK_FILE, 'w') as f:
                 json.dump([], f, indent=2)
-            print(f"✅ Fallback file {FALLBACK_FILE} cleared.")
+            print(f"✅ Fallback file purged.")
     except Exception as e:
-        print(f"❌ Fallback full clear failed: {e}")
+        print(f"❌ Fallback clear failed: {e}")
     
     return True

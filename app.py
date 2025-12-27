@@ -25,28 +25,36 @@ def create_app(config_class=Config):
     app = Flask(__name__)
     app.config.from_object(config_class)
 
-    # Permissive CORS for production
-    CORS(app, resources={r"/api/*": {
-        "origins": ["https://www.webguard.zone.id", "http://localhost:3000"],
+    # Super permissive CORS globally
+    CORS(app, resources={r"/*": {
+        "origins": "*",
         "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"],
         "allow_headers": ["Content-Type", "Authorization", "X-User-Email"],
-        "supports_credentials": True,
-        "expose_headers": ["Content-Type", "Authorization"]
+        "supports_credentials": True
     }})
 
-    # *** CRITICAL: Handle OPTIONS FIRST before any middleware ***
+    @app.after_request
+    def add_cors_headers(response):
+        origin = request.headers.get('Origin')
+        if origin:
+            response.headers['Access-Control-Allow-Origin'] = origin
+        else:
+            response.headers['Access-Control-Allow-Origin'] = '*'
+            
+        response.headers['Access-Control-Allow-Methods'] = 'GET, POST, PUT, DELETE, OPTIONS, PATCH'
+        response.headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization, X-User-Email'
+        response.headers['Access-Control-Allow-Credentials'] = 'true'
+        return response
+
     @app.before_request
-    def handle_options():
+    def handle_preflight():
         if request.method == 'OPTIONS':
-            response = make_response('', 200)
-            origin = request.headers.get('Origin')
-            if origin:
-                response.headers['Access-Control-Allow-Origin'] = origin
-            response.headers['Access-Control-Allow-Methods'] = 'GET, POST, PUT, DELETE, OPTIONS, PATCH'
-            response.headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization, X-User-Email'
-            response.headers['Access-Control-Allow-Credentials'] = 'true'
-            response.headers['Access-Control-Max-Age'] = '86400'
-            return response
+            res = make_response()
+            res.headers['Access-Control-Allow-Origin'] = request.headers.get('Origin', '*')
+            res.headers['Access-Control-Allow-Methods'] = 'GET, POST, PUT, DELETE, OPTIONS, PATCH'
+            res.headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization, X-User-Email'
+            res.headers['Access-Control-Allow-Credentials'] = 'true'
+            return res, 200
 
     # Register blueprints
     app.register_blueprint(auth_bp, url_prefix='/api')
@@ -63,7 +71,7 @@ def create_app(config_class=Config):
     app.register_blueprint(playbooks_bp, url_prefix='/api/playbooks')
     app.register_blueprint(memory_dump_bp, url_prefix='/api/memory-dump')
 
-    # Initialize middleware (AFTER handle_options)
+    # Initialize middleware
     RequestLoggerMiddleware(app)
     IPBlockerMiddleware(app)
     AuthGuardMiddleware(app)
