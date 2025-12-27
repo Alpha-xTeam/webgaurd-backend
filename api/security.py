@@ -120,13 +120,48 @@ def get_tier3_escalations():
 @api_bp.route('/alerts/level1', methods=['GET'])
 @require_auth
 def get_level1_alerts():
-    """Get alerts for Level 1 - Now synchronized with Incidents and Attacks"""
+    """Get alerts for Level 1 - Fetches from ALERTS table (where attacks are logged)"""
     try:
-        # Tier 1 usually sees new incidents
-        res = supabase.table('incidents').select('*').eq('status', 'new').execute()
+        # Fetch unacknowledged alerts (these are the actual attack notifications)
+        alerts_res = supabase.table('alerts').select('*').eq('acknowledged', False).order('created_at', desc=True).limit(50).execute()
+        
+        # Also fetch new incidents if any
+        incidents_res = supabase.table('incidents').select('*').eq('status', 'new').order('created_at', desc=True).limit(50).execute()
+        
+        # Transform alerts to match the expected format for Tier 1
+        formatted_alerts = []
+        
+        for alert in (alerts_res.data or []):
+            formatted_alerts.append({
+                'id': alert.get('id'),
+                'title': alert.get('message', 'Security Alert'),
+                'description': f"Source: {alert.get('source', 'Unknown')}\nSeverity: {alert.get('severity', 'medium')}",
+                'severity': alert.get('severity', 'medium'),
+                'status': 'new' if not alert.get('acknowledged') else 'acknowledged',
+                'created_at': alert.get('created_at'),
+                'source': alert.get('source'),
+                'type': 'alert'
+            })
+        
+        # Also add incidents
+        for inc in (incidents_res.data or []):
+            formatted_alerts.append({
+                'id': inc.get('id'),
+                'title': inc.get('title', 'Security Incident'),
+                'description': inc.get('description', ''),
+                'severity': inc.get('severity', 'medium'),
+                'status': inc.get('status', 'new'),
+                'created_at': inc.get('created_at'),
+                'source': 'Incident',
+                'type': 'incident'
+            })
+        
+        # Sort by created_at descending
+        formatted_alerts.sort(key=lambda x: x.get('created_at', ''), reverse=True)
+        
         return jsonify({
             "success": True,
-            "alerts": res.data
+            "alerts": formatted_alerts
         })
     except Exception as e:
         return jsonify({
