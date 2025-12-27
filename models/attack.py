@@ -232,13 +232,17 @@ def clear_all_attacker_data():
     
     for table in tables_to_clear:
         try:
-            # Use neq to target all rows (standard Supabase pattern for 'delete all')
-            # Using multiple common ID columns just in case
-            supabase.table(table).delete().neq('id', '00000000-0000-0000-0000-000000000001').execute()
-            print(f"✅ Table '{table}' purged.")
+            # More reliable way to delete all rows in Supabase/PostgREST
+            # We use a filter that is always true for any existing row
+            supabase.table(table).delete().gt('created_at', '1970-01-01T00:00:00Z').execute()
+            print(f"✅ Table '{table}' purged via created_at.")
         except Exception as e:
-            # Table might not exist, that's okay
-            print(f"ℹ️ Clear for {table} skipped or failed: {str(e)}")
+            try:
+                # Fallback to id check if created_at is not available or fails
+                supabase.table(table).delete().neq('id', '00000000-0000-0000-0000-000000000001').execute()
+                print(f"✅ Table '{table}' purged via ID neq.")
+            except Exception as e2:
+                print(f"ℹ️ Clear for {table} failed: {str(e2)}")
 
     # 3. Reset local global variables if accessed via this process
     from api.attacker import STORED_SEARCHES, STOLEN_DATA

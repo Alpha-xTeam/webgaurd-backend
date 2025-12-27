@@ -19,28 +19,36 @@ def escalate_to_tier2():
     try:
         data = request.get_json()
         incident_id = data.get('incident_id')
+        item_type = data.get('type', 'incident') # 'alert' or 'incident'
         
-        if incident_id:
-            # Update existing incident
-            update_incident_status(incident_id, 'pending_tier2')
-            # Add note to description or just return
-            return jsonify({
-                "success": True,
-                "message": "Incident moved to Tier 2"
-            }), 200
+        if item_type == 'incident' or not item_type:
+            if incident_id:
+                # Update existing incident
+                update_incident_status(incident_id, 'pending_tier2')
+                return jsonify({
+                    "success": True,
+                    "message": "Incident moved to Tier 2"
+                }), 200
         
-        # Fallback: create new incident if no ID (for legacy/custom alerts)
+        # If it's an alert or if incident update failed/didn't exist, create a new one
+        # Also mark the alert as acknowledged if it's an alert
+        if item_type == 'alert' and incident_id:
+            try:
+                supabase.table('alerts').update({'acknowledged': True}).eq('id', incident_id).execute()
+            except Exception as e:
+                print(f"Failed to acknowledge alert: {e}")
+
         incident_data = {
             'title': f"Escalated: {data.get('attack_type', 'Security Alert')}",
-            'description': data.get('analyst_notes', 'No notes provided.'),
+            'description': f"Source IP: {data.get('source_ip')}\nAnalyst Notes: {data.get('analyst_notes', 'No notes provided.')}",
             'severity': data.get('severity', 'high'),
             'status': 'pending_tier2',
-            'created_at': data.get('escalated_at') or datetime.datetime.utcnow().isoformat()
+            'created_at': datetime.datetime.utcnow().isoformat()
         }
         
         res = create_incident(
             title=incident_data['title'],
-            description=f"Source IP: {data.get('source_ip')}\nTarget URL: {data.get('target_url')}\n\nNotes: {incident_data['description']}",
+            description=incident_data['description'],
             severity=incident_data['severity'],
             created_at=incident_data['created_at']
         )
