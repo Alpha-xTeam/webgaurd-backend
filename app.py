@@ -1,4 +1,4 @@
-from flask import Flask
+from flask import Flask, request
 from flask_cors import CORS
 from config import Config
 from api.auth import api_bp as auth_bp
@@ -33,6 +33,20 @@ def create_app(config_class=Config):
         "supports_credentials": True
     }})
 
+    # *** CRITICAL: Handle OPTIONS FIRST before any middleware ***
+    @app.before_request
+    def handle_options():
+        if request.method == 'OPTIONS':
+            from flask import make_response
+            response = make_response('', 200)
+            origin = request.headers.get('Origin', '*')
+            response.headers['Access-Control-Allow-Origin'] = origin
+            response.headers['Access-Control-Allow-Methods'] = 'GET, POST, PUT, DELETE, OPTIONS, PATCH'
+            response.headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization, X-User-Email'
+            response.headers['Access-Control-Allow-Credentials'] = 'true'
+            response.headers['Access-Control-Max-Age'] = '86400'
+            return response
+
     # Register blueprints
     app.register_blueprint(auth_bp, url_prefix='/api')
     app.register_blueprint(admin_bp, url_prefix='/api/admin')
@@ -48,7 +62,7 @@ def create_app(config_class=Config):
     app.register_blueprint(playbooks_bp, url_prefix='/api/playbooks')
     app.register_blueprint(memory_dump_bp, url_prefix='/api/memory-dump')
 
-    # Initialize middleware
+    # Initialize middleware (AFTER handle_options)
     RequestLoggerMiddleware(app)
     IPBlockerMiddleware(app)
     AuthGuardMiddleware(app)
@@ -62,19 +76,6 @@ def create_app(config_class=Config):
         app.config['UPLOAD_FOLDER'] = upload_folder
     
     os.makedirs(upload_folder, exist_ok=True)
-    
-    @app.before_request
-    def handle_options():
-        if request.method == 'OPTIONS':
-            from flask import make_response
-            response = make_response('', 200)
-            origin = request.headers.get('Origin', '*')
-            response.headers['Access-Control-Allow-Origin'] = origin
-            response.headers['Access-Control-Allow-Methods'] = 'GET, POST, PUT, DELETE, OPTIONS, PATCH'
-            response.headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization, X-User-Email'
-            response.headers['Access-Control-Allow-Credentials'] = 'true'
-            response.headers['Access-Control-Max-Age'] = '86400'
-            return response
 
     @app.route('/')
     def index():
